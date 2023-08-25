@@ -1,5 +1,6 @@
 # scBridge
 [![DOI](https://zenodo.org/badge/642258769.svg)](https://zenodo.org/badge/latestdoi/642258769)
+
 This is the official implementation of *scBridge embraces cell heterogeneity in single-cell RNA-seq and ATAC-seq data integration*.
 
 ## Installation
