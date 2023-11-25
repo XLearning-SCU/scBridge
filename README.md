@@ -15,7 +15,7 @@ Note: scBridge runs on a single GPU.
 
 ## Quick Start
 ### Data Preparation
-scBridge accepts AnnData (https://anndata.readthedocs.io/en/latest/index.html) as inputs, including the source (scRNA-seq) and target (scATAC-seq) h5ad files. The source data should include the cell type annotation in `obs.["CellType"]`. The integration process does not require and would not utilize the annotation of the target data. If the target data annotation is provided, the model would evaluate the integration performance by computing metrics such as label transfer accuracy and silhouette score. Put the two h5ad files under the same folder (see the PBMC folder for example).
+scBridge accepts AnnData (https://anndata.readthedocs.io/en/latest/index.html) as inputs, including the source (scRNA-seq) and target (scATAC-seq) h5ad files. The source data should include the cell type annotation in `obs.["CellType"]`. For scATAC-seq peak data, it needs to be first transformed into a scATAC-seq activity matrix using tools such as Signac (https://github.com/stuart-lab/signac). Common genes between the scRNA-seq count matrix and the scATAC-seq activity matrix need to be selected before feeding into scBridge. The integration process does not require and would not utilize the annotation of the target data. If the target data annotation is provided, the model would evaluate the integration performance by computing metrics such as label transfer accuracy and silhouette score. Put the two h5ad files under the same folder (see the PBMC folder for example).
 
 Note: Please unzip the example data with the `gunzip` command.
 
