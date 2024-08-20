@@ -1,0 +1,234 @@
+---
+title: "shareseq_V2_hg19_BMMC"
+author: "zhangdan"
+date: "2023/3/19"
+output: html_document
+---
+
+```{r}
+library(Seurat)
+library(Matrix)
+library(EnsDb.Hsapiens.v75) # 75 for hg19, 86 for hg38
+library(Signac)
+setwd("/mnt/data3/zhangdan/multiomics/rebuttal/SHARE-seq_V2/BMMC")
+```
+
+# scRNA-Seq
+```{r}
+RNA_exp <- Read10X_h5("GSM6284350_BMMC.RNA.hg19.gene.bc.matrices.h5")
+RNA_exp[1:3,1:3]
+colnames(RNA_exp)[1:3]
+dim(RNA_exp) # 51862 110678
+```
+
+# scATAC-seq peak
+```{r}
+cells <- read.table("GSM6284346_BMMC.metadata.txt.gz", sep = "\t", header = TRUE)
+features <- read.table("GSM6284346_BMMC.peaks.txt.gz")
+features$peak <- paste0(features$chr, ":", features$starts, "-", features$end)
+matrix.path <- "GSM6284346_BMMC.count.matrix.txt.gz"
+mat <- readMM(file = matrix.path)
+colnames(mat) <- cells$rna.bc
+rownames(mat) <- features$peak
+dim(mat)
+mat[1:3,1:3] #173026  78708
+
+```
+
+# filter cells
+```{r}
+commmon_cell <- intersect(colnames(mat), colnames(RNA_exp))
+length(commmon_cell) #78520
+scATAC_peak <- mat[, commmon_cell]
+dim(scATAC_peak) # 173026  78520
+scRNA_count <- RNA_exp[, commmon_cell]
+dim(scRNA_count) #51862 78520
+all(colnames(scATAC_peak) == colnames(scRNA_count))
+rownames(cells) <- cells$rna.bc
+meta <- cells[commmon_cell, ]
+table(meta$celltype)
+all(rownames(meta) == colnames(scRNA_count))
+```
+
+# construct scRNA seurat obj 
+```{r}
+scRNA <- CreateSeuratObject(counts = scRNA_count, assay = "RNA", project = "RNA")
+# Perform standard analysis of each modality independently RNA analysis
+scRNA <- NormalizeData(scRNA)
+scRNA <- FindVariableFeatures(scRNA)
+scRNA <- ScaleData(scRNA)
+scRNA <- RunPCA(scRNA)
+scRNA <- RunUMAP(scRNA, dims = 1:30)
+# add metadata
+# add metadata
+scRNA@meta.data$ground_truth <- plyr::mapvalues(from = meta$rna.bc, 
+                                                 to = meta$celltype, 
+                                                 x = rownames(scRNA@meta.data))
+Idents(scRNA) <- scRNA$ground_truth
+DimPlot(scRNA, label = TRUE)
+```
+
+# construct scATAC peak seuratobj
+```{r}
+scATAC <- CreateSeuratObject(
+  counts = scATAC_peak,
+  assay = "test"
+)
+
+# ATAC analysis add gene annotation information
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Hsapiens.v75)
+mylevel <- levels(annotations@seqnames)
+annotations@seqnames@values <- paste0("chr", annotations@seqnames@values)
+annotations@seqnames@values <- plyr::mapvalues(from = "chrMT", to = "chrM", x = annotations@seqnames@values)
+annotations@seqnames@values <- factor(annotations@seqnames@values, levels = gsub("chrMT","chrM",paste0("chr",mylevel)))
+levels(seqnames(annotations))
+rownames(seqinfo(annotations))
+
+annotations@seqinfo@seqnames <- paste0("chr", annotations@seqinfo@seqnames)
+annotations@seqinfo@seqnames <- plyr::mapvalues(from = "chrMT", to = "chrM", x = annotations@seqinfo@seqnames)
+seqlevels(seqinfo(annotations)) <- gsub("chrMT","chrM",paste0("chr",mylevel))
+
+# filter fragment
+## sort -k1,1 -k2,2n GSM6284346_BMMC.ATAC.hg19.fragments.tsv.gz > GSM6284346_BMMC.ATAC.hg19.sorted.fragments.tsv
+## bgzip -@ 8 GSM6284346_BMMC.ATAC.hg19.sorted.fragments.tsv
+## tabix -p bed GSM6284346_BMMC.ATAC.hg19.sorted.fragments.tsv.gz
+gragment <- read.table("GSM6284346_BMMC.ATAC.hg19.sorted.fragments.tsv.gz")
+gragment[1:4,]
+length(intersect(gragment$V4, meta$atac.bc))
+fgragment_filter <- gragment[which(gragment$V4 %in% meta$atac.bc), ]
+fgragment_filter$V4 <- plyr::mapvalues(from = meta$atac.bc, to = meta$rna.bc, x = fgragment_filter$V4)
+head(fgragment_filter)
+length(intersect(fgragment_filter$V4, colnames(scATAC_peak)))
+write.table(fgragment_filter, file="GSM6284346_BMMC.ATAC.hg19.sorted.filter.fragments.tsv", 
+            sep = "\t", col.names = FALSE, row.names = FALSE, quote = FALSE)
+
+
+# create peak seurat obj and add fragment info to the peak seurat obj
+fragpath = "GSM6284346_BMMC.ATAC.hg19.sorted.filter.fragments.tsv.gz"
+scATAC[["peak"]] <- CreateChromatinAssay(
+  counts = scATAC_peak,
+  sep = c(":", "-"),
+  fragments = fragpath,
+  annotation = annotations
+)
+scATAC@assays$test <- NULL
+scATAC@active.assay <- "peak"
+Fragments(scATAC)
+
+scATAC <- RunTFIDF(scATAC)
+scATAC <- FindTopFeatures(scATAC, min.cutoff = "q0")
+scATAC <- RunSVD(scATAC)
+scATAC <- RunUMAP(scATAC, reduction = "lsi", dims = 2:30, reduction.name = "umap.atac", reduction.key = "atacUMAP_")
+```
+
+# gene activity
+```{r}
+gene.activities <- GeneActivity(scATAC, features = VariableFeatures(scRNA))
+dim(gene.activities) # 600 78520
+gene.activities2 <- GeneActivity(scATAC) 
+dim(gene.activities2) # 19957 78520
+saveRDS(gene.activities2, file = "./gene.activities2.rds")
+
+# add gene activities as a new assay
+scATAC[["ACTIVITY"]] <- CreateAssayObject(counts = gene.activities)
+
+# normalize gene activities
+DefaultAssay(scATAC) <- "ACTIVITY"
+scATAC <- NormalizeData(scATAC)
+scATAC <- ScaleData(scATAC, features = rownames(scATAC))
+
+# add metadata
+scATAC@meta.data$ground_truth <- plyr::mapvalues(from = meta$rna.bc, 
+                                                 to = meta$celltype, 
+                                                 x = rownames(scATAC@meta.data))
+Idents(scATAC) <- scATAC$ground_truth
+DimPlot(scATAC, label = TRUE)
+```
+
+# save data
+```{r}
+saveRDS(scATAC, file = "scATAC_seurat.rds")
+saveRDS(scRNA, file = "scRNA_seurat.rds")
+
+# expression matrix for liyunfan
+scRNA_gene_exp <- scRNA_count
+scATAC_gene_activity <- gene.activities2
+common_gene <- intersect(rownames(scRNA_gene_exp), rownames(scATAC_gene_activity))
+all(colnames(scRNA_gene_exp) == colnames(scATAC_gene_activity))
+scRNA_gene_exp_filter <- as.matrix(scRNA_gene_exp[common_gene,])
+scATAC_gene_activity_filter <- scATAC_gene_activity[common_gene, ]
+all(rownames(scRNA_gene_exp_filter) == rownames(scATAC_gene_activity_filter))
+dim(scRNA_gene_exp_filter) #17374  6928
+dim(scATAC_gene_activity_filter) # 17374  6928
+
+scRNA_gene_exp_filter[1:3,1:3]
+colnames(scRNA_gene_exp_filter) <- gsub(",", ".", colnames(scRNA_gene_exp_filter))
+write.table(scRNA_gene_exp_filter, file = "./toliyunfan/shareseq_BMMC_scRNA_gene_exp.txt", 
+            sep = ",", col.names = TRUE, row.names = TRUE, quote = FALSE)
+
+scATAC_gene_activity_filter[1:3,1:3]
+colnames(scATAC_gene_activity_filter) <- gsub(",", ".", colnames(scATAC_gene_activity_filter))
+write.table(scATAC_gene_activity_filter, file = "./toliyunfan/shareseq_BMMC_scATAC_gene_act.txt", 
+            sep = ",", col.names = TRUE, row.names = TRUE, quote = FALSE)
+
+
+# metainfo for liyunfan
+metainfo <- meta
+all(metainfo$rna.bc == colnames(scRNA_gene_exp_filter))
+metainfo <- metainfo[, c("rna.bc", "celltype")]
+metainfo$rna.bc <- gsub(",", ".",metainfo$rna.bc)
+write.table(metainfo, file = "./toliyunfan/shareseq_BMMC_meta.txt", 
+            sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
+table(metainfo$celltype)
+```
+
+# peak for glue
+## annotate gene 
+```{r}
+anntations_df <- data.frame(annotations)
+
+genesymbol <- rownames(scATAC_gene_activity_filter)
+genesymbol <- intersect(genesymbol, anntations_df$gene_name)
+anntations_df_filter <- anntations_df[which(anntations_df$gene_name %in% genesymbol), ]
+anntations_df_filter <- anntations_df_filter[!duplicated(anntations_df_filter$gene_name), ]
+anntations_df_filter <- anntations_df_filter[, c(7,1,2,3,5)]
+colnames(anntations_df_filter) = c("gene_name", "chrom", "chromStart", "chromEnd", "strand")
+rownames(anntations_df_filter) = anntations_df_filter$gene_name
+geneanno = anntations_df_filter
+write.table(geneanno, file = "./toglue/geneanno.txt",
+            sep = "\t", col.names = TRUE, row.names = TRUE, quote = FALSE)
+```
+
+## change seuratobj to h5ad
+```{r}
+library(SeuratDisk)
+library(Seurat) 
+# peak seurat
+peak_seurat <-CreateSeuratObject(counts = scATAC_peak, project = "peak", min.cells = 0, min.features = 0)
+if(all(rownames(peak_seurat@meta.data) == meta$rna.bc)){
+ peak_seurat@meta.data$cell_type <- meta$celltype 
+ peak_seurat@meta.data$domain <- "scATAC-seq"
+ peak_seurat@meta.data <- peak_seurat@meta.data[, 4:5]
+}
+
+# rna seurat
+scRNA_count[1:3,1:3]
+rna_seurat <-CreateSeuratObject(counts = scRNA_count[geneanno$gene_name, ], assay = "RNA", project = "RNA")
+rna_seurat@meta.data$domain <- "scRNA-seq"
+all(rownames(rna_seurat@meta.data) == meta$rna.bc)
+rna_seurat@meta.data$cell_type <- meta$celltype
+rna_seurat@meta.data <- rna_seurat@meta.data[, 4:5]
+
+# save data
+#seurat2h5seurat中间过渡	
+SaveH5Seurat(peak_seurat,filename="./toglue/peak.h5seurat", overwrite = TRUE)
+#数据转为最终h5ad格式
+Convert("./toglue/peak.h5seurat", dest = "h5ad", overwrite = TRUE)
+#seurat2h5seurat中间过渡	
+SaveH5Seurat(rna_seurat,filename="./toglue/RNA.h5seurat", overwrite = TRUE)
+#数据转为最终h5ad格式
+Convert("./toglue/RNA.h5seurat", dest = "h5ad", overwrite = TRUE)
+```
+
+
+

@@ -1,0 +1,131 @@
+---
+title: "snareseq cortex mm10 prepare h5ad for glue"
+author: "zhangdan"
+date: "2023/3/24"
+output: html_document
+---
+
+```{r}
+setwd("/mnt/data3/zhangdan/multiomics/D4_SNARE/ATAC/peak")
+library(Seurat)
+library(Matrix)
+library(EnsDb.Mmusculus.v79) # 75 for hg19, 86 for hg38
+library(Signac)
+```
+
+
+# meta
+```{r}
+meta <- read.table("/mnt/data3/zhangdan/multiomics/D4_SNARE/ATAC/final/metainfo.txt")
+meta # 9134 cell
+```
+# scRNA
+```{r}
+RNA_exp <- read.table("/mnt/data3/zhangdan/multiomics/D4_SNARE/ATAC/final/SNARE_gene_expression.txt.gz")
+dim(RNA_exp) # 9134 cell
+RNA_exp[1:4,1:4]
+colnames(RNA_exp) <- gsub("X", "",colnames(RNA_exp) )
+```
+
+
+# scATAC peak
+```{r}
+peak <- Read10X("/mnt/data3/zhangdan/multiomics/D4_SNARE/ATAC/")
+dim(peak) # 244544  10309
+peak[1:4,1:4]
+```
+
+# filter peak cells
+```{r}
+commmon_cell <- colnames(RNA_exp)
+length(commmon_cell) #9134
+scATAC_peak <- peak[, commmon_cell]
+dim(scATAC_peak) # 244544   9134
+scRNA_count <- RNA_exp
+dim(scRNA_count) #16750  9134
+all(colnames(scATAC_peak) == colnames(scRNA_count))
+all(rownames(meta) == colnames(scATAC_peak))
+```
+
+
+# construct scRNA seurat obj 
+```{r}
+scRNA <- CreateSeuratObject(counts = scRNA_count, assay = "RNA", project = "RNA")
+# Perform standard analysis of each modality independently RNA analysis
+scRNA <- NormalizeData(scRNA)
+scRNA <- FindVariableFeatures(scRNA)
+scRNA <- ScaleData(scRNA)
+scRNA <- RunPCA(scRNA)
+scRNA <- RunUMAP(scRNA, dims = 1:30)
+# add metadata
+# add metadata
+scRNA@meta.data$ground_truth <- plyr::mapvalues(from = rownames(meta), 
+                                                 to = meta$celltype, 
+                                                 x = rownames(scRNA@meta.data))
+Idents(scRNA) <- scRNA$ground_truth
+DimPlot(scRNA, label = TRUE)
+```
+
+
+
+# peak for glue
+## annotate gene 
+```{r}
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Mmusculus.v79)
+mylevel <- levels(annotations@seqnames)
+annotations@seqnames@values <- paste0("chr", annotations@seqnames@values)
+annotations@seqnames@values <- plyr::mapvalues(from = "chrMT", to = "chrM", x = annotations@seqnames@values)
+annotations@seqnames@values <- factor(annotations@seqnames@values, levels = gsub("chrMT","chrM",paste0("chr",mylevel)))
+levels(seqnames(annotations))
+rownames(seqinfo(annotations))
+
+annotations@seqinfo@seqnames <- paste0("chr", annotations@seqinfo@seqnames)
+annotations@seqinfo@seqnames <- plyr::mapvalues(from = "chrMT", to = "chrM", x = annotations@seqinfo@seqnames)
+seqlevels(seqinfo(annotations)) <- gsub("chrMT","chrM",paste0("chr",mylevel))
+
+
+anntations_df <- data.frame(annotations)
+genesymbol <- rownames(scRNA)
+length(genesymbol) #16750
+anntations_df_filter <- anntations_df[which(anntations_df$gene_name %in% genesymbol), ]
+anntations_df_filter <- anntations_df_filter[!duplicated(anntations_df_filter$gene_name), ]
+anntations_df_filter <- anntations_df_filter[, c(7,1,2,3,5)]
+colnames(anntations_df_filter) = c("gene_name", "chrom", "chromStart", "chromEnd", "strand")
+rownames(anntations_df_filter) = anntations_df_filter$gene_name
+geneanno = anntations_df_filter
+write.table(geneanno, file = "./geneanno.txt",
+            sep = "\t", col.names = TRUE, row.names = TRUE, quote = FALSE)
+```
+
+## change seuratobj to h5ad
+```{r}
+library(SeuratDisk)
+library(Seurat) 
+# peak seurat
+peak_seurat <-CreateSeuratObject(counts = scATAC_peak, project = "peak", min.cells = 0, min.features = 0)
+if(all(rownames(peak_seurat@meta.data) == rownames(meta))){
+ peak_seurat@meta.data$cell_type <- meta$celltype 
+ peak_seurat@meta.data$domain <- "scATAC-seq"
+ peak_seurat@meta.data <- peak_seurat@meta.data[, 4:5]
+}
+
+# rna seurat
+scRNA_count[1:3,1:3]
+rna_seurat <-CreateSeuratObject(counts = scRNA_count, assay = "RNA", project = "RNA")
+rna_seurat@meta.data$domain <- "scRNA-seq"
+all(rownames(rna_seurat@meta.data) == rownames(meta))
+rna_seurat@meta.data$cell_type <- meta$celltype
+rna_seurat@meta.data <- rna_seurat@meta.data[, 4:5]
+
+# save data
+#seurat2h5seurat中间过渡	
+SaveH5Seurat(peak_seurat,filename="./peak.h5seurat", overwrite = TRUE)
+#数据转为最终h5ad格式
+Convert("./peak.h5seurat", dest = "h5ad", overwrite = TRUE)
+#seurat2h5seurat中间过渡	
+SaveH5Seurat(rna_seurat,filename="./RNA.h5seurat", overwrite = TRUE)
+#数据转为最终h5ad格式
+Convert("./RNA.h5seurat", dest = "h5ad", overwrite = TRUE)
+```
+
+

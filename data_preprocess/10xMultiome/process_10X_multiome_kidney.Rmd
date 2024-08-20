@@ -1,0 +1,497 @@
+---
+title: "10X_multiome_kidney"
+author: "zhangdan"
+date: "2023/3/20"
+output: html_document
+---
+
+```{r}
+library("Seurat")
+library("Matrix")
+library("ggplot2")
+library("Signac")
+library("EnsDb.Mmusculus.v79")
+```
+
+
+```{r}
+setwd("/mnt/data3/zhangdan/multiomics/rebuttal/10X_multiome_kidney")
+```
+
+# load peak and scRNA exp
+```{r}
+cells <- read.table("./filtered_feature_bc_matrix/barcodes.tsv.gz", sep = "\t", header = FALSE)
+features <- read.table("./filtered_feature_bc_matrix/features.tsv.gz", sep = "\t")
+scRNA_features <- features[which(features$V3 == "Gene Expression"),]
+scATAC_features <- features[which(features$V3 == "Peaks"),]
+matrix.path <- "./filtered_feature_bc_matrix/matrix.mtx.gz"
+mat <- readMM(file = matrix.path)
+mat[1:4,1:4]
+colnames(mat) <- cells$V1
+rownames(mat) <- features$V1
+dim(mat)
+
+scRNA_exp <- mat[1:nrow(scRNA_features), ]
+peak_exp <- mat[c(nrow(scATAC_features) + 1):nrow(mat), ]
+scRNA_exp[1:10,1:10]
+peak_exp[1:4,1:4]
+
+# change scRNA gene name
+gtf <- rtracklayer::readGFF("/mnt/raid64/ref_genomes/MusMus/release101/Mus_musculus.GRCm38.101.sorted.gtf")
+gtf <- gtf[which(gtf$type == "gene"),]
+geneid <- rownames(scRNA_exp)
+geneid <- data.frame(geneid)
+geneid$symbol <- plyr::mapvalues(from = gtf$gene_id, to = gtf$gene_name, x = geneid$geneid)
+geneid[is.na(geneid$symbol),]
+rownames(scRNA_exp) <- geneid$symbol
+scRNA_exp[1:10,1:10]
+```
+
+
+# construct scRNA seurat obj 
+```{r}
+scRNA <- CreateSeuratObject(counts = scRNA_exp, assay = "RNA", project = "RNA")
+VlnPlot(scRNA, features = c("nFeature_RNA", "nCount_RNA"), ncol = 2)
+dim(scRNA) #32285 14652
+# Perform standard analysis of each modality independently RNA analysis
+scRNA <- NormalizeData(scRNA)
+scRNA <- FindVariableFeatures(scRNA)
+scRNA <- ScaleData(scRNA)
+scRNA <- RunPCA(scRNA)
+ElbowPlot(scRNA)
+scRNA <- RunUMAP(scRNA, dims = 1:15)
+n.pcs = 15
+res.used <- 0.5
+scRNA <- FindNeighbors(scRNA, dims = 1:n.pcs, verbose = F)
+scRNA <- FindClusters(scRNA, resolution = res.used, verbose = F)
+# add metadata
+Idents(scRNA) <- scRNA$seurat_clusters
+DimPlot(scRNA, label = TRUE)
+```
+
+
+## proximal tubule cells
+```{r  fig.height=8, fig.width=16}
+FeaturePlot(scRNA, c("Keg1","G6pc", "Alpl","Slc13a1","Scin"),cols = c("grey", "red"),ncol = 4)
+```
+## intercalated cells 
+```{r  fig.height=4, fig.width=16}
+FeaturePlot(scRNA, c("Rhcg", "Adgrf5", "Insrr","Atp6v1g3"),cols = c("grey", "red"),ncol = 4)
+```
+
+
+
+## distal tubule cells 
+```{r  fig.height=4, fig.width=16}
+FeaturePlot(scRNA, c("Slc12a3","Slc8a1","Wnk1"),cols = c("grey", "red"),ncol = 4)
+```
+
+
+# Endothelial cell 
+```{r  fig.height=4, fig.width=16}
+FeaturePlot(scRNA, c("Apela","Lypd2","Slc4a11"),cols = c("grey", "red"),ncol = 4)
+```
+
+#  Glomerular podocytes cell 
+```{r  fig.height=4, fig.width=16}
+FeaturePlot(scRNA, c("Tm4sf1","Plvap","Plpp1","Fabp4"),cols = c("grey", "red"),ncol = 4)
+
+```
+
+# Macrophage 
+```{r  fig.height=4, fig.width=16}
+FeaturePlot(scRNA, c("H2-Eb1","Cd68","C1qc","C1qb"),cols = c("grey", "red"),ncol = 4)
+```
+
+
+# Intercalated cells of collecting duct
+```{r  fig.height=4, fig.width=16}
+FeaturePlot(scRNA, c("Slc4a1","Atp6v1g3","Aqp6","Foxi1"),cols = c("grey", "red"),ncol = 4)
+```
+
+
+# Distal convoluted tubule 
+```{r  fig.height=8, fig.width=16}
+FeaturePlot(scRNA, c("Slc12a3","Pgam2","Wnk1","Slc16a7","Gpx6","Egf"),cols = c("grey", "red"),ncol = 4)
+
+```
+
+
+#Proximal tubule cell
+```{r  fig.height=8, fig.width=16}
+FeaturePlot(scRNA, c("Slc22a6","Cyp4a14","Aadat","Kap","Napsa","Cyp4a14","Slc22a6","Slc13a3"),cols = c("grey", "red"),ncol = 4)
+```
+
+
+#Proximal tubule brush border cell
+```{r  fig.height=8, fig.width=16}
+FeaturePlot(scRNA, c("Miox","Gsta2","Ass1","Rida","Aldob"),cols = c("grey", "red"),ncol = 4)
+```
+
+
+# podocytes 
+```{r  fig.height=4, fig.width=16}
+FeaturePlot(scRNA, c("Podxl", "Wt1", "Mme"),cols = c("grey", "red"),ncol = 4)
+```
+
+
+# distal collecting duct principal cells (Kcne1+, Scnn1a+, Aqp2+)
+```{r  fig.height=4, fig.width=16}
+FeaturePlot(scRNA, c("Kcne1", "Scnn1a", "Aqp2"),cols = c("grey", "red"),ncol = 4)
+```
+
+
+## Dotplot
+```{r}
+my_dotplot <- function(celltype, seurat_obj, cluster_fac) {
+  require(data.table)
+  require(plyr)
+  require(forcats)
+  
+  res <-
+    data.frame(gene = unlist(celltype),
+               celltype = rep(names(celltype), mapply(length, celltype)))
+  res <- res[!duplicated(res$gene),]
+  
+  
+  DotPlot(seurat_obj, features = unique(unlist(celltype))) -> p_dot
+  p_dot$data$CellType <- rep(res$celltype,length(unique(p_dot$data$id)))
+  #p_dot$data$CellType <- factor(p_dot$data$CellType, levels = unique(fct_inorder(p_dot$data$CellType)))
+  
+  cluster_dotplot <- p_dot$data %>% mutate(CellType = factor(CellType, levels = unique(fct_inorder(CellType))))
+  cluster_dotplot$id <- factor(cluster_dotplot$id,levels = fct_inorder(cluster_fac))
+  cluster_dotplot[order(cluster_dotplot$id),]
+
+  p <-
+    ggplot(cluster_dotplot,
+           aes(id, features.plot, size = pct.exp, colour = avg.exp.scaled)) +
+    geom_point() +
+    theme_bw() +
+    theme(
+      axis.title = element_blank(),
+      axis.text.y = element_text(size = 12),
+      axis.text.x = element_text(
+        size = 12,
+        angle = 90 ,
+        hjust = 1,
+        vjust = 0.5
+      ),
+      panel.grid = element_blank()
+    ) +
+    scale_colour_viridis_c(direction = -1) +
+    facet_grid(CellType ~ . , scales = "free", space = "free") +
+    theme(strip.text.y = element_text(angle = 0))
+  p
+  
+}
+```
+
+```{r}
+#proximal_tubule = c("Keg1","G6pc", "Alpl","Slc13a1","Scin")
+intercalated = c("Rhcg", "Adgrf5", "Insrr","Atp6v1g3")
+distal_tubule = c("Slc12a3","Slc8a1","Wnk1")
+Endothelial = c("Apela","Lypd2","Slc4a11")
+Glomerular_podocytes = c("Tm4sf1","Plvap","Plpp1")
+Macrophage = c("H2-Eb1","Cd68","C1qc","C1qb")
+Intercalated_cells_of_collecting_duct = c("Slc4a1","Atp6v1g3","Aqp6","Foxi1")
+Distal_convoluted_tubule  = c("Slc12a3","Pgam2","Wnk1","Slc16a7","Gpx6","Egf")
+Proximal_tubule = c("Cyp4a14","Aadat","Kap","Napsa")
+#  # Epithelial cell of proximal tubule/ proximal tubule cell 
+Proximal_tubule_brush_border = c("Miox","Gsta2","Ass1","Rida","Aldob")
+Podocytes = c("Podxl", "Wt1", "Mme")
+distal_collecting_duct_principal_cells = c("Kcne1", "Scnn1a", "Aqp2")
+```
+
+```{r}
+genes_all = list(intercalated = intercalated,
+                 distal_tubule = distal_tubule,
+                 Endothelial = Endothelial,
+                 Glomerular_podocytes = Glomerular_podocytes,
+                 Macrophage = Macrophage,
+                 Intercalated_cells_of_collecting_duct = Intercalated_cells_of_collecting_duct,
+                 Distal_convoluted_tubule = Distal_convoluted_tubule,
+                 Proximal_tubule = Proximal_tubule,
+                 Proximal_tubule_brush_border = Proximal_tubule_brush_border,
+                 Podocytes = Podocytes,
+                 distal_collecting_duct_principal_cells = distal_collecting_duct_principal_cells
+                 )
+```
+
+```{r,fig.height=10,fig.width=8}
+Idents(scRNA) <- scRNA$RNA_snn_res.0.5
+cluster_fac <- names(table(Idents(scRNA)))
+my_dotplot(celltype = genes_all, seurat_obj = scRNA, cluster_fac)
+```
+
+#
+```{r}
+# Fibroblast: Cfh, Lama2
+# Kidney collecting duct principal cell
+# Podocyte (Magi2, Ptpro)
+# NK_T
+# Ery
+# SMC (Ctnna3)
+# Mesangial cell (S100a6, Slc12a2)
+Idents(scRNA) <- scRNA$cell_type
+table(scRNA$cell_type)
+cluster.markers <- FindMarkers(scRNA, ident.1 = "NK_T", min.pct = 0.25)
+cluster.markers[order(cluster.markers$avg_log2FC, decreasing = TRUE),] 
+
+
+```
+
+```{r}
+FeaturePlot(scRNA, c("Adipor2"))
+```
+
+
+
+# annotation
+```{r}
+scRNA@meta.data$cell_type <- plyr::mapvalues(from = c(0,1,6,14,17,13,4,10,5,8,9,19,2,11,12,16,3,7,18,15),
+                                            to = c(rep("Proximal tubule brush border cell", 4),
+                                                   "Ery",
+                                                   "Endothelial",
+                                                   rep("Distal convoluted tubule cell", 2),
+                                                   rep("Distal tubule cell",2),
+                                                   "Distal collecting duct principal cell",
+                                                   "Mesangial cell",
+                                                   "Glomerular podocyte",
+                                                   "Intercalated cell",
+                                                   "Podocyte",
+                                                   "NK_T",
+                                                   "Proximal tubule cell",
+                                                   "Fibroblast",
+                                                   "Smooth muscle cell",
+                                                   "Macrophage"), 
+                                            x = scRNA@meta.data$RNA_snn_res.0.5)
+
+
+table(scRNA@meta.data$cell_type)
+Idents(scRNA) <- scRNA$cell_type
+DimPlot(scRNA, label = TRUE)
+```
+
+
+```{r,fig.height=10,fig.width=8}
+Fibroblast = c("Cfh", "Lama2")
+Mesangial_cell = c("S100a6", "Slc12a2")
+SMC = "Ctnna3"
+NK_T = "Adipor2"
+
+
+genes_all = list(Proximal_tubule_brush_border = Proximal_tubule_brush_border,
+                 Glomerular_podocytes = Glomerular_podocytes,
+                 Proximal_tubule = Proximal_tubule,
+                 Distal_convoluted_tubule = Distal_convoluted_tubule,
+                 Distal_tubule = distal_tubule,
+                 Fibroblast = Fibroblast,
+                 Distal_collecting_duct_principal_cells = distal_collecting_duct_principal_cells,
+                 Intercalated = intercalated,
+                 Podocytes = Podocytes,
+                 Endothelial = Endothelial,
+                 Macrophage = Macrophage,
+                 NK_T = NK_T,
+                 SMC = SMC,
+                 Mesangial_cell = Mesangial_cell
+                 )
+
+#Idents(scRNA) <- scRNA$RNA_snn_res.0.5
+cluster_fac <- names(table(Idents(scRNA)))
+scRNA_rmEry <- subset(scRNA, idents = "Ery", invert = TRUE)
+p_dot <- my_dotplot(celltype = genes_all, seurat_obj = scRNA_rmEry, cluster_fac)
+p_dot
+```
+
+
+```{r}
+getwd()
+ggsave(p_dot, file = "10X_multiome_kidney_dotplot.pdf", width = 8, height = 10)
+```
+
+
+# construct scATAC peak seuratobj
+```{r}
+dim(peak_exp)
+peak_exp[1:5,1:5]
+all(colnames(peak_exp) == rownames(scRNA@meta.data))
+scATAC <- CreateSeuratObject(
+  counts = peak_exp,
+  assay = "test"
+)
+
+# ATAC analysis add gene annotation information
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Mmusculus.v79)
+mylevel <- levels(annotations@seqnames)
+annotations@seqnames@values <- paste0("chr", annotations@seqnames@values)
+annotations@seqnames@values <- plyr::mapvalues(from = "chrMT", to = "chrM", x = annotations@seqnames@values)
+annotations@seqnames@values <- factor(annotations@seqnames@values, levels = gsub("chrMT","chrM",paste0("chr",mylevel)))
+levels(seqnames(annotations))
+rownames(seqinfo(annotations))
+
+annotations@seqinfo@seqnames <- paste0("chr", annotations@seqinfo@seqnames)
+annotations@seqinfo@seqnames <- plyr::mapvalues(from = "chrMT", to = "chrM", x = annotations@seqinfo@seqnames)
+seqlevels(seqinfo(annotations)) <- gsub("chrMT","chrM",paste0("chr",mylevel))
+
+# filter fragment
+## sort -k1,1 -k2,2n M_Kidney_Chromium_Nuc_Isolation_vs_SaltyEZ_vs_ComplexTissueDP_atac_fragments.tsv > sort_fragments.tsv
+## bgzip -@ 20 sort_fragments.tsv
+## tabix -p bed sort_fragments.tsv.gz
+gragment <- read.table("sort_fragments.tsv.gz")
+gragment[1:4,]
+length(intersect(gragment$V4, meta$atac.bc))
+fgragment_filter <- gragment[which(gragment$V4 %in% meta$atac.bc), ]
+fgragment_filter$V4 <- plyr::mapvalues(from = meta$atac.bc, to = meta$rna.bc, x = fgragment_filter$V4)
+head(fgragment_filter)
+length(intersect(fgragment_filter$V4, colnames(scATAC_peak)))
+write.table(fgragment_filter, file="GSM6284345_colon.ATAC.mm10.sorted.filterd.fragments.tsv", 
+            sep = "\t", col.names = FALSE, row.names = FALSE, quote = FALSE)
+
+
+# create peak seurat obj and add fragment info to the peak seurat obj
+fragpath = "sort_fragments.tsv.gz"
+scATAC[["peak"]] <- CreateChromatinAssay(
+  counts = peak_exp,
+  sep = c(":", "-"),
+  fragments = fragpath,
+  annotation = annotations
+)
+scATAC@assays$test <- NULL
+scATAC@active.assay <- "peak"
+Fragments(scATAC)
+
+scATAC <- RunTFIDF(scATAC)
+scATAC <- FindTopFeatures(scATAC, min.cutoff = "q0")
+scATAC <- RunSVD(scATAC)
+scATAC <- RunUMAP(scATAC, reduction = "lsi", dims = 2:30, reduction.name = "umap.atac", reduction.key = "atacUMAP_")
+```
+
+# gene activity
+```{r}
+gene.activities <- GeneActivity(scATAC, features = VariableFeatures(scRNA))
+dim(gene.activities) #1591 14652
+gene.activities2 <- GeneActivity(scATAC) 
+dim(gene.activities2) #21808 14652
+
+# add gene activities as a new assay
+scATAC[["ACTIVITY"]] <- CreateAssayObject(counts = gene.activities)
+
+# normalize gene activities
+DefaultAssay(scATAC) <- "ACTIVITY"
+scATAC <- NormalizeData(scATAC)
+scATAC <- ScaleData(scATAC, features = rownames(scATAC))
+
+# add metadata
+scATAC@meta.data$ground_truth <- plyr::mapvalues(from = rownames(scRNA@meta.data), 
+                                                 to = as.character(scRNA@meta.data$cell_type), 
+                                                 x = rownames(scATAC@meta.data))
+Idents(scATAC) <- scATAC$ground_truth
+DimPlot(scATAC, label = TRUE)
+```
+
+
+# save data
+```{r}
+saveRDS(scATAC, file = "scATAC_seurat.rds")
+saveRDS(scRNA, file = "scRNA_seurat.rds")
+
+# expression matrix for liyunfan
+scRNA_gene_exp <- scRNA_exp
+scATAC_gene_activity <- gene.activities2
+common_gene <- intersect(rownames(scRNA_gene_exp), rownames(scATAC_gene_activity))
+all(colnames(scRNA_gene_exp) == colnames(scATAC_gene_activity))
+scRNA_gene_exp_filter <- as.matrix(scRNA_gene_exp[common_gene,])
+scATAC_gene_activity_filter <- scATAC_gene_activity[common_gene, ]
+all(rownames(scRNA_gene_exp_filter) == rownames(scATAC_gene_activity_filter))
+dim(scRNA_gene_exp_filter) #20105 14652
+dim(scATAC_gene_activity_filter) # 20105 14652
+
+scRNA_gene_exp_filter[1:8,1:8]
+write.table(scRNA_gene_exp_filter, file = "./toliyunfan/10X_multiome_kidney_scRNA_gene_exp.txt", 
+            sep = ",", col.names = TRUE, row.names = TRUE, quote = FALSE)
+
+scATAC_gene_activity_filter[1:3,1:3]
+write.table(scATAC_gene_activity_filter, file = "./toliyunfan/10X_multiome_kidney_scATAC_gene_act.txt", 
+            sep = ",", col.names = TRUE, row.names = TRUE, quote = FALSE)
+
+
+# metainfo for liyunfan
+metainfo <- scRNA@meta.data
+metainfo$cells <- rownames(metainfo)
+all(metainfo$cells == colnames(scRNA_gene_exp_filter))
+metainfo <- metainfo[, c("cells", "cell_type")]
+write.table(metainfo, file = "./toliyunfan/10X_multiome_kidney_meta.txt", 
+            sep = "\t", col.names = TRUE, row.names = FALSE, quote = FALSE)
+length(table(metainfo$cell_type))
+```
+
+# peak for glue
+## annotate gene (here gene should be as same as toliyunfan)
+```{r}
+gtf <- rtracklayer::readGFF("/mnt/raid64/ref_genomes/MusMus/release101/Mus_musculus.GRCm38.101.sorted.gtf")
+gtf <- gtf[which(gtf$type == "gene"),]
+gtf$seqid <- as.character(gtf$seqid)
+genesymbol <- rownames(scRNA_gene_exp_filter)
+genesymbol <- intersect(genesymbol, gtf$gene_name)
+
+geneanno <- data.frame(genesymbol)
+geneanno$chrom <- plyr::mapvalues(from = gtf$gene_name, to = gtf$seqid, x = geneanno$genesymbol)
+geneanno$chromStart <- plyr::mapvalues(from = gtf$gene_name, to = gtf$start, x = geneanno$genesymbol)
+geneanno$chromEnd <- plyr::mapvalues(from = gtf$gene_name, to = gtf$end, x = geneanno$genesymbol)
+head(geneanno)
+rownames(geneanno) <- geneanno$genesymbol
+geneanno$chrom <- paste0("chr",geneanno$chrom)
+unique(geneanno$chrom)
+geneanno$chrom <- gsub("chrMT", "chrM", geneanno$chrom)
+colnames(geneanno)[1] <- "gene_name"
+geneanno$strand <- plyr::mapvalues(from = gtf$gene_name, to = gtf$strand, x = geneanno$gene_name)
+
+write.table(geneanno, file = "./toglue/geneanno.txt",
+            sep = "\t", col.names = TRUE, row.names = TRUE, quote = FALSE)
+```
+
+## change seuratobj to h5ad
+```{r}
+library(SeuratDisk)
+library(Seurat) 
+# peak seurat
+peak_seurat <-CreateSeuratObject(counts = peak_exp, project = "peak", min.cells = 0, min.features = 0)
+if(all(rownames(peak_seurat@meta.data) == metainfo$cells)){
+ peak_seurat@meta.data$cell_type <- metainfo$cell_type 
+ peak_seurat@meta.data$domain <- "scATAC-seq"
+ peak_seurat@meta.data <- peak_seurat@meta.data[, 4:5]
+}
+
+# rna seurat
+scRNA_exp[1:3,1:3]
+dim(scRNA_exp)
+rna_seurat <-CreateSeuratObject(counts = scRNA_exp[geneanno$gene_name, ], assay = "RNA", project = "RNA")
+rna_seurat@meta.data$domain <- "scRNA-seq"
+all(rownames(rna_seurat@meta.data) == metainfo$cells)
+rna_seurat@meta.data$cell_type <- metainfo$cell_type
+rna_seurat@meta.data <- rna_seurat@meta.data[, 4:5]
+
+# save data
+#seurat2h5seurat中间过渡	
+SaveH5Seurat(peak_seurat,filename="./toglue/peak.h5seurat", overwrite = TRUE)
+#数据转为最终h5ad格式
+Convert("./toglue/peak.h5seurat", dest = "h5ad", overwrite = TRUE)
+#seurat2h5seurat中间过渡	
+SaveH5Seurat(rna_seurat,filename="./toglue/RNA.h5seurat", overwrite = TRUE)
+#数据转为最终h5ad格式
+Convert("./toglue/RNA.h5seurat", dest = "h5ad", overwrite = TRUE)
+```
+
+
+# filter ery
+```{r}
+# peak
+Idents(peak_seurat) <- peak_seurat$cell_type
+unique(peak_seurat$cell_type)
+peak_seurat_rmery <- subset(peak_seurat, idents = setdiff(unique(peak_seurat$cell_type), "Ery"))
+#seurat2h5seurat中间过渡	
+SaveH5Seurat(peak_seurat,filename="./toglue/peak_rmery.h5seurat", overwrite = TRUE)
+#数据转为最终h5ad格式
+Convert("./toglue/peak_rmery.h5seurat", dest = "h5ad", overwrite = TRUE)
+```
+
